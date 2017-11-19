@@ -281,7 +281,7 @@ func (ws *WSConn) write(mt int, msg interface{}) error {
 	}
 	if uint32(len(message)) > ws.maxMsgLen {
 		glog.Errorf("write msg too long -> %d", len(message))
-		return
+		return errors.New("write msg too long")
 	}
 	ws.conn.SetWriteDeadline(time.Now().Add(writeWait))
 	return ws.conn.WriteMessage(mt, message)
