@@ -101,13 +101,6 @@ func (ws *WSConn) Send(msg interface{}) {
 		glog.Errorf("WSConn msg channel closed %x", msg)
 		return
 	}
-	switch msg.(type) {
-	case []byte:
-		if uint32(len(msg.([]byte))) > ws.maxMsgLen {
-			glog.Errorf("write msg too long -> %d", len(msg.([]byte)))
-			return
-		}
-	}
 	if len(ws.msgCh) == cap(ws.msgCh) {
 		glog.Errorf("send msg channel full -> %d", len(ws.msgCh))
 		return
@@ -258,7 +251,7 @@ func (ws *WSConn) writePump() {
 			}
 			switch msg.(type) {
 			case proto.Message:
-				err := ws.write(websocket.TextMessage, msg.([]byte))
+				err := ws.write(websocket.TextMessage, msg)
 				if err != nil {
 					return
 				}
@@ -272,16 +265,26 @@ func (ws *WSConn) writePump() {
 }
 
 //写入
-func (ws *WSConn) write(mt int, msg []byte) error {
-	id, b, err := packet(msg)
-	if err != nil {
-		glog.Errorf("write msg err %v", msg)
-		return err
+func (ws *WSConn) write(mt int, msg interface{}) error {
+	var message []byte
+	switch msg.(type) {
+	case []byte:
+		message = msg.([]byte)
+	case proto.Message:
+		id, b, err := packet(msg)
+		if err != nil {
+			glog.Errorf("write msg err %v", msg)
+			return err
+		}
+		//msg = Pack(id, b, ws.index)
+		message = Pack(id, b, 0)
 	}
-	//msg = Pack(id, b, ws.index)
-	msg = Pack(id, b, 0)
+	if uint32(len(message)) > ws.maxMsgLen {
+		glog.Errorf("write msg too long -> %d", len(message))
+		return
+	}
 	ws.conn.SetWriteDeadline(time.Now().Add(writeWait))
-	return ws.conn.WriteMessage(mt, msg)
+	return ws.conn.WriteMessage(mt, message)
 }
 
 //.
