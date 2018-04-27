@@ -13,6 +13,9 @@ import (
 //全局
 var Rooms *RoomsList
 
+//通道关闭信号
+type closeFlag int
+
 //牌桌列表结构
 type RoomsList struct {
 	list        map[string]inter.Pid //牌桌列表
@@ -21,7 +24,6 @@ type RoomsList struct {
 	listPaohuzi map[string]inter.Pid //牌桌列表
 	listCoin    map[string]inter.Pid //牌桌列表
 	gen         *data.RoomIDGen      //房间id
-	closeCh     chan bool            //关闭通道
 	stopCh      chan struct{}        //关闭通道
 	msgCh       chan interface{}     //消息通道
 }
@@ -34,7 +36,6 @@ func InitRoomsList() inter.Pid {
 		listClassic: make(map[string]inter.Pid),
 		listPaohuzi: make(map[string]inter.Pid),
 		listCoin:    make(map[string]inter.Pid),
-		closeCh:     make(chan bool, 1),
 		msgCh:       make(chan interface{}, 100),
 		stopCh:      make(chan struct{}),
 		gen:         new(data.RoomIDGen),
@@ -51,13 +52,15 @@ func (t *RoomsList) ticker() {
 	glog.Infof("rooms ticker started -> %#v", t.gen)
 	for {
 		select {
-		case <-t.closeCh:
+		case <-t.stopCh:
 			glog.Infof("rooms closed list len -> %d", len(t.list))
 			glog.Infof("rooms closed gen -> %#v", t.gen)
 			return
 		default: //防止阻塞
 		}
 		select {
+		case <-t.stopCh:
+			return
 		case <-tick:
 			//逻辑处理
 			//TODO 过期清理
@@ -115,16 +118,10 @@ func (t *RoomsList) Close() {
 
 //关闭
 func (t *RoomsList) closed() {
+	//关闭消息通道
+	t.Send(closeFlag(1))
 	//停止发送消息
 	close(t.stopCh)
-	//关闭计时器
-	if t.closeCh != nil {
-		t.closeCh <- true
-		close(t.closeCh) //关闭计时器
-		t.closeCh = nil  //消除计时器
-	}
-	//关闭消息通道
-	close(t.msgCh)
 }
 
 //.
@@ -154,6 +151,8 @@ func (t *RoomsList) handler() {
 			t.handler_call(msg.(*data.Call)) //route
 		case bool:
 			t.Close()
+		case closeFlag:
+			return //msg channel closed
 		default:
 			glog.Errorf("unknown message %v", msg)
 		}

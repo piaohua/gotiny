@@ -10,13 +10,15 @@ import (
 	"github.com/golang/glog"
 )
 
+//通道关闭信号
+type closeFlag int
+
 //用户
 type Player struct {
 	*data.User                  // 基础数据
 	conn       inter.Pid        // 连接
 	room       inter.Pid        // 房间
 	state      bool             // 数据回存状态
-	closeCh    chan bool        // 计时器关闭通道
 	stopCh     chan struct{}    // 关闭通道
 	msgCh      chan interface{} // 消息通道
 }
@@ -24,10 +26,9 @@ type Player struct {
 //创建
 func NewPlayer(user *data.User) *Player {
 	this := &Player{
-		User:    user,
-		closeCh: make(chan bool, 1),
-		stopCh:  make(chan struct{}),
-		msgCh:   make(chan interface{}, 100),
+		User:   user,
+		stopCh: make(chan struct{}),
+		msgCh:  make(chan interface{}, 100),
 	}
 	go this.ticker()  //goroutine
 	go this.handler() //goroutine
@@ -40,12 +41,15 @@ func (this *Player) ticker() {
 	tick := time.Tick(5 * time.Minute) //每5分钟
 	for {
 		select {
-		case <-this.closeCh:
+		case <-this.stopCh:
 			glog.Infof("player close -> %s", this.GetUserid())
 			return
 		default:
 		}
 		select {
+		case <-this.stopCh:
+			glog.Infof("player close -> %s", this.GetUserid())
+			return
 		case <-tick:
 			this.Send(new(data.PlayerSave))
 		}
@@ -127,16 +131,10 @@ func (t *Player) Close() {
 
 //关闭
 func (t *Player) closed() {
+	//关闭消息通道
+	t.Send(closeFlag(1))
 	//停止发送消息
 	close(t.stopCh)
-	//关闭计时器
-	if t.closeCh != nil {
-		t.closeCh <- true
-		close(t.closeCh) //关闭计时器
-		t.closeCh = nil  //消除计时器
-	}
-	//关闭消息通道
-	close(t.msgCh)
 }
 
 //.
@@ -158,10 +156,13 @@ func (t *Player) handler() {
 			//TODO
 		case bool:
 			t.Close()
+			return
 		case int:
 			t.conn = nil //断开连接
 		case *data.Call:
 			t.handler_call(msg.(*data.Call)) //route
+		case closeFlag:
+			return //msg channel closed
 		default:
 			glog.Errorf("unknown message %v", msg)
 		}

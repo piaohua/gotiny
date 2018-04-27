@@ -12,22 +12,23 @@ import (
 
 var Players *PlayerList
 
+//通道关闭信号
+type closeFlag int
+
 type PlayerList struct {
-	list    map[string]inter.Pid
-	gen     *data.UserIDGen  //角色id
-	closeCh chan bool        // 计时器关闭通道
-	stopCh  chan struct{}    // 关闭通道
-	msgCh   chan interface{} // 消息通道
+	list   map[string]inter.Pid
+	gen    *data.UserIDGen  //角色id
+	stopCh chan struct{}    // 关闭通道
+	msgCh  chan interface{} // 消息通道
 }
 
 //初始化
 func InitPlayerList() inter.Pid {
 	Players = &PlayerList{
-		list:    make(map[string]inter.Pid),
-		closeCh: make(chan bool, 1),
-		stopCh:  make(chan struct{}),
-		msgCh:   make(chan interface{}, 100),
-		gen:     new(data.UserIDGen),
+		list:   make(map[string]inter.Pid),
+		stopCh: make(chan struct{}),
+		msgCh:  make(chan interface{}, 100),
+		gen:    new(data.UserIDGen),
 	}
 	Players.initPlayerID()
 	go Players.ticker()  //goroutine
@@ -70,16 +71,10 @@ func (t *PlayerList) Close() {
 
 //关闭
 func (t *PlayerList) closed() {
+	//关闭消息通道
+	t.Send(closeFlag(1))
 	//停止发送消息
 	close(t.stopCh)
-	//关闭计时器
-	if t.closeCh != nil {
-		t.closeCh <- true
-		close(t.closeCh) //关闭计时器
-		t.closeCh = nil  //消除计时器
-	}
-	//关闭消息通道
-	close(t.msgCh)
 }
 
 //.
@@ -110,6 +105,8 @@ func (t *PlayerList) handler() {
 			t.handler_call(msg.(*data.Call)) //route
 		case bool:
 			t.Close()
+		case closeFlag:
+			return //msg channel closed
 		default:
 			glog.Errorf("unknown message %v", msg)
 		}
@@ -217,12 +214,14 @@ func (t *PlayerList) ticker() {
 	glog.Infof("onlines ticker started -> %d", 1)
 	for {
 		select {
-		case <-t.closeCh:
+		case <-t.stopCh:
 			glog.Infof("players closed -> %d", len(t.list))
 			return
 		default:
 		}
 		select {
+		case <-t.stopCh:
+			return
 		case <-tick:
 			//t.Send()
 		}

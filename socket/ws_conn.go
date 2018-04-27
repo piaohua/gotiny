@@ -29,10 +29,12 @@ type WSConn struct {
 	maxMsgLen uint32           // 最大消息长度
 	index     int              // 包序
 	player    inter.Pid        // 玩家消息通道
-	closeCh   chan bool        // 计时器关闭通道
 	stopCh    chan struct{}    // 关闭通道
 	msgCh     chan interface{} // 消息通道
 }
+
+//通道关闭信号
+type closeFlag int
 
 //' 创建连接
 func newWSConn(conn *websocket.Conn, pendingWriteNum int, maxMsgLen uint32) *WSConn {
@@ -41,7 +43,6 @@ func newWSConn(conn *websocket.Conn, pendingWriteNum int, maxMsgLen uint32) *WSC
 		maxMsgLen: maxMsgLen,
 		msgCh:     make(chan interface{}, pendingWriteNum),
 		stopCh:    make(chan struct{}),
-		closeCh:   make(chan bool, 1),
 	}
 }
 
@@ -81,16 +82,10 @@ func (ws *WSConn) Close() {
 
 //关闭
 func (ws *WSConn) closed() {
+	//关闭消息通道
+	t.Send(closeFlag(1))
 	//停止发送消息
 	close(ws.stopCh)
-	//关闭计时器
-	if ws.closeCh != nil {
-		ws.closeCh <- true
-		close(ws.closeCh) //关闭计时器
-		ws.closeCh = nil  //消除计时器
-	}
-	//关闭消息通道
-	close(ws.msgCh)
 }
 
 //.
@@ -236,14 +231,6 @@ func (ws *WSConn) writePump() {
 	tick := time.Tick(pingPeriod)
 	for {
 		select {
-		case <-tick:
-			err := ws.write(websocket.PingMessage, []byte{})
-			if err != nil {
-				return
-			}
-		default:
-		}
-		select {
 		case msg, ok := <-ws.msgCh:
 			if !ok {
 				ws.write(websocket.CloseMessage, []byte{})
@@ -257,8 +244,15 @@ func (ws *WSConn) writePump() {
 				}
 			case bool:
 				ws.Close()
+			case closeFlag:
+				return //msg channel closed
 			default:
 				glog.Errorf("unknown message %v", msg)
+			}
+		case <-tick:
+			err := ws.write(websocket.PingMessage, []byte{})
+			if err != nil {
+				return
 			}
 		}
 	}
